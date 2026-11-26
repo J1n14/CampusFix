@@ -19,4 +19,10 @@ create policy "CampusFix requests are visible to visitors"
   on public.requests for select to anon using (true);
 drop policy if exists "Visitors can submit CampusFix requests" on public.requests;
 create policy "Visitors can submit CampusFix requests"
-  on public.requests for insert to anon with check (true);
+  on public.requests for insert to anon with check (status = 'open');
+
+grant usage on schema public to anon;
+grant select (id, title, location, issue_type, description, priority, status, created_at, updated_at)
+  on public.requests to anon;
+grant insert (title, location, issue_type, description, priority)
+  on public.requests to anon;

@@ -14,6 +14,8 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   process.exit(1);
 }
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Keep private staff metadata out of the public API.
+const requestColumns = 'id, title, location, issue_type, description, priority, status, created_at, updated_at';
 
 app.use(express.json());
 // Serve the complete dashboard (HTML, JavaScript, styles, and other assets).
@@ -32,14 +34,14 @@ function validateRequest(body) {
   if (!body.location || typeof body.location !== 'string' || !body.location.trim()) {
     errors.push('Location is required');
   }
-  if (!body.issue_type || typeof body.issue_type !== 'string' || !body.issue_type.trim()) {
-    errors.push('Issue type is required');
+  if (!['lighting', 'plumbing', 'furniture', 'other'].includes(body.issue_type)) {
+    errors.push('Issue type is invalid');
   }
   if (!body.description || typeof body.description !== 'string' || !body.description.trim()) {
     errors.push('Description is required');
   }
-  if (!body.priority || typeof body.priority !== 'string' || !body.priority.trim()) {
-    errors.push('Priority is required');
+  if (!['low', 'medium', 'high'].includes(body.priority)) {
+    errors.push('Priority is invalid');
   }
   // status will default to 'open' if not supplied
   return errors;
@@ -72,7 +74,7 @@ app.get('/api/summary', async (req, res) => {
 // Get all requests with optional filters
 app.get('/api/requests', async (req, res) => {
   const { search, status, category, priority, sort, limit } = req.query;
-  let query = supabase.from('requests').select('*');
+  let query = supabase.from('requests').select(requestColumns);
   if (search) query = query.ilike('title', `%${search}%`);
   if (status) query = query.eq('status', status);
   if (category) query = query.eq('issue_type', category);
@@ -92,7 +94,7 @@ app.get('/api/requests', async (req, res) => {
 app.get('/api/requests/:id', async (req, res) => {
   const { data, error } = await supabase
     .from('requests')
-    .select('*')
+    .select(requestColumns)
     .eq('id', req.params.id)
     .single();
   if (error) {
@@ -114,7 +116,6 @@ app.post('/api/requests', async (req, res) => {
     issue_type,
     description,
     priority,
-    created_by = 'anonymous', // placeholder – replace with auth later
   } = req.body;
   const { data, error } = await supabase
     .from('requests')
@@ -124,32 +125,14 @@ app.post('/api/requests', async (req, res) => {
       issue_type,
       description,
       priority,
-      created_by,
-      status: 'open',
     })
-    .select()
+    .select(requestColumns)
     .single();
   if (error) {
     console.error('Insert error', error);
     return res.status(500).json({ error: 'Failed to save request' });
   }
   res.status(201).json(data);
-});
-
-// Update request (status, assigned_to, comments)
-app.patch('/api/requests/:id', async (req, res) => {
-  const updates = req.body;
-  updates.updated_at = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('requests')
-    .update(updates)
-    .eq('id', req.params.id)
-    .single();
-  if (error) {
-    console.error('Patch error', error);
-    return res.status(400).json({ error: 'Failed to update request' });
-  }
-  res.status(200).json(data);
 });
 
 app.listen(PORT, '0.0.0.0', () => {
