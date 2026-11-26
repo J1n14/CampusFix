@@ -8,8 +8,10 @@ CampusFix is a campus facilities portal for reporting maintenance issues and tra
 - Search and filter requests by text, status, category, and priority.
 - Report form with validation, a confirmation, and a generated request detail view.
 - Request detail page with location, category, priority, date, request number, and status progress.
-- “My reports” remembers request IDs in the current browser using local storage.
-- REST API: `GET /api/requests`, `GET /api/summary`, `GET /api/requests/:id`, and `POST /api/requests`.
+- Student sign-up/sign-in through Supabase Auth.
+- “My reports” remembers request IDs per signed-in account in the current browser.
+- Allowlisted facilities admins can review reports and update their status from a protected admin page.
+- REST API: request, summary, health, authentication, and protected admin routes.
 
 ## Run locally
 
@@ -17,7 +19,8 @@ CampusFix is a campus facilities portal for reporting maintenance issues and tra
 2. Install packages with `npm install`.
 3. Create a Supabase project and run [`data/schema.sql`](data/schema.sql) in its SQL Editor.
 4. Copy `.env.example` to `.env` and set `SUPABASE_URL` and `SUPABASE_ANON_KEY` from the Supabase project settings.
-5. Start the app with `npm start` and open `http://localhost:8080`.
+5. To enable admin tools, set `SUPABASE_SERVICE_ROLE_KEY` to the private server key and `ADMIN_EMAILS` to a comma-separated list of facilities admin emails. Never add the service-role key to frontend code or Git.
+6. Start the app with `npm start` and open `http://localhost:8080`.
 
 The `.env` file is ignored by Git. Never commit Supabase credentials.
 
@@ -47,6 +50,8 @@ Returns the inserted record with HTTP `201`; invalid required fields return `400
 
 Push this repository to GitHub, then create a Render Web Service from the repository. Render reads the included `render.yaml`; set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in the service environment. The health check is `/api/health`.
 
-## Database access
+## Authentication and database access
 
-The included schema allows anonymous visitors to read campus requests and submit reports, as required by this public demo. Do not collect sensitive personal information in reports. Staff-only status updates and authentication are intentionally not exposed by this student-facing build.
+The web interface requires a Supabase Auth account to enter the student portal. Admin API routes verify the user session and require the email to appear in `ADMIN_EMAILS`; status updates use the service-role key on the server only. The existing database grants also allow the public anon role to read request fields and insert reports for the public demo, while row-level security prevents anon updates and deletes. Do not collect sensitive personal information in reports.
+
+For the deployed Render service, configure `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Add `SUPABASE_SERVICE_ROLE_KEY` and `ADMIN_EMAILS` in Render’s private environment settings to turn on admin status changes. Admin tools stay unavailable until both are configured.

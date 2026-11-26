@@ -2,9 +2,26 @@
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => [...document.querySelectorAll(s)];
   const esc = (v = '') => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const state = { requests: [], page: 'dashboard', owned: new Set(JSON.parse(localStorage.getItem('campusfixOwned') || '[]')) };
+  const state = { requests: [], page: 'dashboard', owned: new Set(), ownedKey: '', accessToken: '', user: null, isAdmin: false, authMode: 'login', adminRequests: [] };
   const api = async (url, options) => {
-    const response = await fetch(url, options);
+    const headers = { ...(options?.headers || {}) };
+    if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`;
+    let response = await fetch(url, { ...options, headers });
+    if (response.status === 401 && state.refreshToken && !url.startsWith('/api/auth/')) {
+      const refreshed = await fetch('/api/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: state.refreshToken }) });
+      if (refreshed.ok) {
+        const refreshedData = await refreshed.json();
+        state.accessToken = refreshedData.session.access_token;
+        state.refreshToken = refreshedData.session.refresh_token;
+        sessionStorage.setItem('campusfixAccessToken', state.accessToken);
+        sessionStorage.setItem('campusfixRefreshToken', state.refreshToken);
+        headers.Authorization = `Bearer ${state.accessToken}`;
+        response = await fetch(url, { ...options, headers });
+      } else {
+        sessionStorage.removeItem('campusfixAccessToken'); sessionStorage.removeItem('campusfixRefreshToken');
+        state.accessToken = ''; state.refreshToken = '';
+      }
+    }
     let data;
     try { data = await response.json(); } catch { data = {}; }
     if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
@@ -55,11 +72,61 @@
     $('#mineList').innerHTML = rows.length ? rows.map(requestRow).join('') : empty('Your reports will show up here', 'When you submit a report in this browser, you can track it here.');
   }
   function go(page) {
+    if (page === 'admin' && !state.isAdmin) page = 'dashboard';
     state.page = page;
     $$('.page-section').forEach(el => el.classList.toggle('visible', el.id === `${page}Page`));
     $$('.nav button').forEach(el => el.classList.toggle('active', el.dataset.page === page));
-    $('#crumbTitle').textContent = ({ dashboard: 'Overview', requests: 'All requests', mine: 'My reports', detail: 'Request details' })[page] || 'Overview';
+    $('#crumbTitle').textContent = ({ dashboard: 'Overview', requests: 'All requests', mine: 'My reports', detail: 'Request details', admin: 'Facilities admin' })[page] || 'Overview';
+    if (page === 'admin') loadAdmin();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  function setAuthMode(mode) {
+    state.authMode = mode;
+    const signup = mode === 'signup';
+    $$('[data-auth-mode]').forEach(button => button.classList.toggle('active', button.dataset.authMode === mode));
+    $('#nameField').hidden = !signup;
+    $('#authPassword').autocomplete = signup ? 'new-password' : 'current-password';
+    $('#authHeading').textContent = signup ? 'Join your campus' : 'Welcome back';
+    $('#authIntro').textContent = signup ? 'Create an account to report issues and follow their progress.' : 'Sign in to submit a report and keep track of your requests.';
+    $('#authSubmit').textContent = signup ? 'Create account' : 'Sign in';
+    $('#authMessage').textContent = '';
+    $('#authMessage').classList.remove('success');
+    $('#authSwitch').innerHTML = signup ? 'Already have an account? <button type="button" data-auth-mode="login">Sign in</button>' : 'New to CampusFix? <button type="button" data-auth-mode="signup">Create an account</button>';
+  }
+  function enterApp(user, isAdmin) {
+    state.user = user; state.isAdmin = Boolean(isAdmin); state.ownedKey = `campusfixOwned:${user.id}`;
+    state.owned = new Set(JSON.parse(localStorage.getItem(state.ownedKey) || '[]'));
+    document.body.classList.add('authed');
+    $('#authGate').hidden = true;
+    $('#userLabel').textContent = user.email || 'Campus student';
+    $('#avatar').textContent = (user.email || 'S').slice(0, 1).toUpperCase();
+    $('#userRole').textContent = state.isAdmin ? 'Facilities admin' : 'Student portal';
+    $('#adminNav').hidden = !state.isAdmin;
+    load();
+  }
+  async function restoreSession() {
+    state.accessToken = sessionStorage.getItem('campusfixAccessToken') || '';
+    state.refreshToken = sessionStorage.getItem('campusfixRefreshToken') || '';
+    if (state.accessToken) {
+      try {
+        const session = await api('/api/auth/me');
+        enterApp(session.user, session.isAdmin);
+        return;
+      } catch { sessionStorage.removeItem('campusfixAccessToken'); state.accessToken = ''; }
+    }
+    $('#authGate').hidden = false;
+  }
+  async function loadAdmin() {
+    $('#adminList').innerHTML = '<div class="loading">Loading requests…</div>';
+    $('#adminNote').textContent = 'Loading admin requests…';
+    try {
+      state.adminRequests = await api('/api/admin/requests');
+      $('#adminNote').textContent = `${state.adminRequests.length} report${state.adminRequests.length === 1 ? '' : 's'} · most recent first`;
+      $('#adminList').innerHTML = state.adminRequests.length ? state.adminRequests.map(r => `<div class="admin-row"><div><div class="admin-row-title">${esc(r.title || categoryLabel(r.issue_type))}</div><small>⌖ ${esc(r.location)} · ${esc(categoryLabel(r.issue_type))} · ${esc(dateLabel(r.created_at))}</small></div><select aria-label="Status for ${esc(r.title || r.id)}" data-admin-status="${esc(r.id)}"><option value="open" ${r.status === 'open' ? 'selected' : ''}>Open</option><option value="in_progress" ${r.status === 'in_progress' ? 'selected' : ''}>In progress</option><option value="resolved" ${r.status === 'resolved' ? 'selected' : ''}>Resolved</option></select><button class="secondary" data-save-status="${esc(r.id)}">Save status</button></div>`).join('') : empty('No reports yet', 'Student submissions will appear here for review.');
+    } catch (err) {
+      $('#adminNote').textContent = err.message;
+      $('#adminList').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
+    }
   }
   async function openDetail(id) {
     go('detail');
@@ -87,10 +154,44 @@
     $('#formError').textContent = ''; const btn = $('#submitBtn'); btn.disabled = true; btn.textContent = 'Sending…';
     try {
       const created = await api('/api/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
-      state.owned.add(String(created.id)); localStorage.setItem('campusfixOwned', JSON.stringify([...state.owned]));
+      state.owned.add(String(created.id)); localStorage.setItem(state.ownedKey, JSON.stringify([...state.owned]));
       modal(false); form.reset(); showToast(`Report received · #${String(created.id).slice(0, 8).toUpperCase()}`); await load(); openDetail(created.id);
     } catch (err) { $('#formError').textContent = err.message || 'Could not send your report. Please try again.'; }
     finally { btn.disabled = false; btn.textContent = 'Send report'; }
   });
-  load();
+  document.addEventListener('click', e => { const mode = e.target.closest('[data-auth-mode]')?.dataset.authMode; if (mode) setAuthMode(mode); });
+  $('#authForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const values = Object.fromEntries(new FormData(e.currentTarget).entries());
+    const submit = $('#authSubmit'); const message = $('#authMessage');
+    message.textContent = ''; message.classList.remove('success'); submit.disabled = true; submit.textContent = state.authMode === 'signup' ? 'Creating account…' : 'Signing in…';
+    try {
+      const result = await api(state.authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+      if (!result.session?.access_token) {
+        setAuthMode('login');
+        message.textContent = result.message || 'Check your school email to confirm your account, then sign in.';
+        message.classList.add('success');
+      } else {
+        state.accessToken = result.session.access_token;
+        sessionStorage.setItem('campusfixAccessToken', state.accessToken);
+        state.refreshToken = result.session.refresh_token;
+        sessionStorage.setItem('campusfixRefreshToken', state.refreshToken);
+        const session = await api('/api/auth/me');
+        enterApp(session.user, session.isAdmin);
+      }
+    } catch (err) { message.textContent = err.message || 'Could not complete sign in.'; }
+    finally { submit.disabled = false; submit.textContent = state.authMode === 'signup' ? 'Create account' : 'Sign in'; }
+  });
+  $('#signOut').addEventListener('click', () => { sessionStorage.removeItem('campusfixAccessToken'); sessionStorage.removeItem('campusfixRefreshToken'); state.accessToken = ''; state.refreshToken = ''; state.user = null; state.isAdmin = false; document.body.classList.remove('authed'); $('#authGate').hidden = false; setAuthMode('login'); });
+  $('#refreshAdmin').addEventListener('click', loadAdmin);
+  document.addEventListener('click', async e => {
+    const button = e.target.closest('[data-save-status]');
+    if (!button) return;
+    const id = button.dataset.saveStatus; const select = document.querySelector(`[data-admin-status="${CSS.escape(id)}"]`);
+    button.disabled = true; button.textContent = 'Saving…';
+    try { await api(`/api/admin/requests/${encodeURIComponent(id)}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: select.value }) }); showToast('Request status updated.'); await loadAdmin(); await load(); }
+    catch (err) { showToast(err.message || 'Could not update status.'); }
+    finally { button.disabled = false; button.textContent = 'Save status'; }
+  });
+  restoreSession();
 })();
