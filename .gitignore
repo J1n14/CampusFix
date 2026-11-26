@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/*.db
+data/*.sqlite
+npm-debug.log*
+.DS_Store
+Thumbs.db
+/audit-report.json
+/extract_pdf.py
+/final_project_text.txt
+/plan.md
+/setup.ps1
+/src/app.js
+/src/app.py
